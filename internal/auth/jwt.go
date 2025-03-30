@@ -23,6 +23,10 @@ type JWTClaims struct {
 	jwt.RegisteredClaims
 }
 
+func (c *JWTClaims) Valid() error {
+	return nil
+}
+
 // NewJWTAuth creates a new JWT authentication handler
 func NewJWTAuth(secretKey string, tokenDuration time.Duration) *JWTAuth {
 	return &JWTAuth{

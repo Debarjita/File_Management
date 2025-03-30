@@ -1,14 +1,13 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"file-sharing-platform/internal/auth"
 	"file-sharing-platform/internal/service"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 )
 
 type FileHandler struct {
@@ -21,123 +20,115 @@ func NewFileHandler(fileService *service.FileService) *FileHandler {
 	}
 }
 
-func (h *FileHandler) UploadFile(w http.ResponseWriter, r *http.Request) {
-	userID, err := auth.GetUserIDFromRequest(r)
+func (h *FileHandler) UploadFile(c *gin.Context) {
+	userID, err := auth.GetUserIDFromContext(c) // Updated to use gin.Context
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	err = r.ParseMultipartForm(10 << 20)
+	err = c.Request.ParseMultipartForm(10 << 20)
 	if err != nil {
-		http.Error(w, "Unable to parse form", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to parse form"})
 		return
 	}
 
-	file, header, err := r.FormFile("file")
+	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		http.Error(w, "No file provided", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
 		return
 	}
 	defer file.Close()
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	fileInfo, err := h.fileService.UploadFile(ctx, userID, header.Filename, header.Size, header.Header.Get("Content-Type"), file)
 	if err != nil {
-		http.Error(w, "Failed to upload file: "+err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload file: " + err.Error()})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(fileInfo)
+	c.JSON(http.StatusOK, fileInfo)
 }
 
-func (h *FileHandler) GetUserFiles(w http.ResponseWriter, r *http.Request) {
-	userID, err := auth.GetUserIDFromRequest(r)
+func (h *FileHandler) GetUserFiles(c *gin.Context) {
+	userID, err := auth.GetUserIDFromContext(c)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	files, err := h.fileService.GetUserFiles(ctx, userID, 0, 0)
 	if err != nil {
-		http.Error(w, "Error retrieving files: "+err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error retrieving files"})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(files)
+	c.JSON(http.StatusOK, files)
 }
 
-func (h *FileHandler) ShareFile(w http.ResponseWriter, r *http.Request) {
-	userID, err := auth.GetUserIDFromRequest(r)
+func (h *FileHandler) ShareFile(c *gin.Context) {
+	userID, err := auth.GetUserIDFromContext(c)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	vars := mux.Vars(r)
-	fileID, err := strconv.ParseInt(vars["file_id"], 10, 64)
+	fileID, err := strconv.ParseInt(c.Param("file_id"), 10, 64)
 	if err != nil {
-		http.Error(w, "Invalid file ID", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file ID"})
 		return
 	}
 
 	expirationHours := 24
-	if expStr := r.URL.Query().Get("expires_in"); expStr != "" {
+	if expStr := c.Query("expires_in"); expStr != "" {
 		if exp, err := strconv.Atoi(expStr); err == nil && exp > 0 {
 			expirationHours = exp
 		}
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	shareURL, err := h.fileService.ShareFile(ctx, strconv.FormatInt(userID, 10), fileID, strconv.Itoa(expirationHours))
 	if err != nil {
-		http.Error(w, "Error sharing file: "+err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error sharing file"})
 		return
 	}
 
-	response := map[string]string{"share_url": shareURL.ShareURL}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	c.JSON(http.StatusOK, gin.H{"share_url": shareURL.ShareURL})
 }
 
-func (h *FileHandler) GetSharedFile(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	shareToken := vars["share_token"]
+func (h *FileHandler) GetSharedFile(c *gin.Context) {
+	shareToken := c.Param("share_token")
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	fileInfo, err := h.fileService.GetFile(ctx, shareToken)
 	if err != nil {
-		http.Error(w, "File not found or share expired", http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found or share expired"})
 		return
 	}
 
-	http.Redirect(w, r, fileInfo.PublicURL, http.StatusFound)
+	c.Redirect(http.StatusFound, fileInfo.PublicURL)
 }
 
-func (h *FileHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
-	userID, err := auth.GetUserIDFromRequest(r)
+func (h *FileHandler) DeleteFile(c *gin.Context) {
+	userID, err := auth.GetUserIDFromContext(c)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	vars := mux.Vars(r)
-	fileID, err := strconv.ParseInt(vars["file_id"], 10, 64)
+	fileID, err := strconv.ParseInt(c.Param("file_id"), 10, 64)
 	if err != nil {
-		http.Error(w, "Invalid file ID", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file ID"})
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	err = h.fileService.DeleteFile(ctx, strconv.FormatInt(userID, 10), fileID)
 	if err != nil {
-		http.Error(w, "Error deleting file: "+err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error deleting file"})
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }

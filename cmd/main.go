@@ -12,6 +12,7 @@ import (
 
 	"file-sharing-platform/internal/api"
 	"file-sharing-platform/internal/auth"
+
 	//"file-sharing-platform/internal/auth"
 	"file-sharing-platform/internal/config"
 	"file-sharing-platform/internal/db"
@@ -22,7 +23,7 @@ import (
 	"file-sharing-platform/pkg/cache"
 	"file-sharing-platform/pkg/storage"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
@@ -46,6 +47,7 @@ func main() {
 	// Initialize repositories
 	userRepo := db.NewUserRepository(database)
 	fileRepo := db.NewFileRepository(database)
+
 	// Initialize cache
 	var cacheClient cache.Cache
 	if cfg.RedisURL != "" {
@@ -82,7 +84,8 @@ func main() {
 	go fileCleanupWorker.Start()
 
 	// Initialize JWT authentication
-	jwtAuth, err := auth.NewJWTAuth(cfg.JWTSecret)
+	jwtAuth := auth.NewJWTAuth(cfg.JWTSecret, time.Hour*24)
+
 	if err != nil {
 		log.Fatalf("Failed to initialize JWT authentication: %v", err)
 	}
@@ -92,33 +95,32 @@ func main() {
 	fileHandler := api.NewFileHandler(fileService)
 
 	// Initialize router
-	router := mux.NewRouter()
+	router := gin.Default()
 
-	// Create rate limiter
-	rateLimiter := middleware.NewRateLimiter(cacheClient, cfg.RateLimit, 60) // 100 reqs per minute per user
-
-	// Apply global middleware
+	// Apply middleware
 	router.Use(middleware.RequestLogger)
-	router.Use(rateLimiter.Limit)
+	router.Use(middleware.AuthMiddleware(jwtAuth))
 
 	// Auth routes
-	router.HandleFunc("/api/register", authHandler.Register).Methods("POST")
-	router.HandleFunc("/api/login", authHandler.Login).Methods("POST")
+	router.POST("/api/register", authHandler.Register)
+	router.POST("/api/login", authHandler.Login)
 
 	// WebSocket route
-	router.HandleFunc("/ws/notifications", notificationHub.HandleWebSocket)
+	router.GET("/ws/notifications", func(c *gin.Context) {
+		notificationHub.HandleWebSocket(c.Writer, c.Request)
+	})
 
 	// Public file share route
-	router.HandleFunc("/share/{share_token}", fileHandler.GetSharedFile).Methods("GET")
+	router.GET("/share/:share_token", fileHandler.GetSharedFile)
 
-	// Protected routes
-	apiRouter := router.PathPrefix("/api").Subrouter()
-	apiRouter.Use(middleware.AuthMiddleware(JWTAuth))
+	// Protected routes (require authentication)
+	authRoutes := router.Group("/api")
+	authRoutes.Use(middleware.AuthMiddleware(jwtAuth))
 
-	apiRouter.HandleFunc("/upload", fileHandler.UploadFile).Methods("POST")
-	apiRouter.HandleFunc("/files", fileHandler.GetUserFiles).Methods("GET")
-	apiRouter.HandleFunc("/files/{file_id}", fileHandler.DeleteFile).Methods("DELETE")
-	apiRouter.HandleFunc("/share/{file_id}", fileHandler.ShareFile).Methods("GET")
+	authRoutes.POST("/upload", fileHandler.UploadFile)
+	authRoutes.GET("/files", fileHandler.GetUserFiles)
+	authRoutes.DELETE("/files/:file_id", fileHandler.DeleteFile)
+	authRoutes.GET("/share/:file_id", fileHandler.ShareFile)
 
 	// Create HTTP server
 	server := &http.Server{
