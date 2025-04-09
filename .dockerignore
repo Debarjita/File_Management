@@ -1,0 +1,24 @@
+# Ignore build artifacts and temp files
+*.log
+*.tmp
+*.out
+*.exe
+*.test
+*.swp
+
+# Go modules
+vendor/
+bin/
+
+# Git
+.git
+.gitignore
+
+# IDE / Editor settings
+.vscode/
+.idea/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
